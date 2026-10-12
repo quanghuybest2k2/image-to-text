@@ -40,9 +40,11 @@ npm run lint    # eslint
   Tesseract.js is loaded with a dynamic `import()` on the first **Extract text**
   click, so it is code-split out of the initial page load.
 - `src/lib/languages.ts` — curated language list. Auto-detect is the default
-  option; `vie` (`AUTO_BASE_LANGUAGE`) is what its first pass starts from.
+  option, and `AUTO_BASE_LANGUAGE` (`"vie+eng"`) is what it runs with.
 - `src/lib/detect-language.ts` — auto-detect verdict. Lazily imported, so
   `tinyld` (~251 KB gz) only ships when the user actually picks Auto-detect.
+- `src/lib/binarize.ts` — Otsu pre-binarization, applied to every image before
+  it reaches Tesseract.
 
 A single Tesseract worker is reused across runs and re-initialized with
 `worker.reinitialize(lang)` when the language changes, so the engine core is only
@@ -139,6 +141,41 @@ Measured verdicts — **10/10**, using the real OCR path:
 Tesseract's own Orientation & Script Detection could extend this to any script,
 but it needs a legacy core + `osd` data (**+7.6 MB**) and still only reports the
 *script* (`Latin`), not the language — so it was deliberately left out.
+
+### Preprocessing
+
+Every image is binarized with **Otsu's threshold** before OCR (`src/lib/binarize.ts`).
+
+Tesseract binarizes internally, but on a screenshot mixing text with a photo it
+happily reads the photo as characters. A real dark-mode chat screenshot:
+
+```txt
+Oo Em bị nó tấn công vị giác =))    <- hallucinated prefix
+Bún » A                            <- the message action buttons
+4 Sz v= "4 ot + Soe"               <- the cat sticker, read as text
+1622                               <- should be 14:22
+```
+
+Dark mode itself turned out **not** to be the cause — a synthetic dark chat at
+20px scored 0.988 similarity raw, with inverting, 2×/3× upscaling and
+autocontrast all scoring identically. The photo and the UI chrome were.
+
+Raw vs Otsu-binarized, `vie+eng`, similarity to ground truth:
+
+| image                    | raw   | binarized |        |
+| ------------------------ | ----- | --------- | ------ |
+| chat w/ sticker + icons  | 0.718 | **0.798** | wins   |
+| dark chat, no photo      | 0.988 | 0.988     | tie    |
+| pure en / vi / mixed     | 1.000 | 1.000     | tie    |
+| French, short label      | 1.000 | 1.000     | tie    |
+
+Binary wins 1, ties 6, **raw wins 0** — so it runs unconditionally, for manual
+languages too. If the browser can't provide a canvas the original file is used
+instead, so preprocessing can never be the reason an OCR run fails.
+
+`otsuThreshold()` is exported and was cross-checked against a Python reference
+on five real images: **5/5 identical thresholds** (89–136). Luma uses ITU-R 601
+coefficients to match that reference exactly.
 
 ## Why this is free forever
 

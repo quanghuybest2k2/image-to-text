@@ -7,6 +7,7 @@ import {
   AUTO_LANGUAGE,
   LANGUAGES,
 } from "@/lib/languages";
+import { binarizeForOcr } from "@/lib/binarize";
 
 type Phase = "idle" | "working" | "done" | "error";
 
@@ -52,8 +53,11 @@ function overallProgress(status: string, progress: number): number | null {
  * `loadImage()` accepts `File`/`Blob` at runtime, but the published `ImageLike`
  * type was never updated to say so. Passing the `File` straight through avoids
  * re-encoding the whole photo as base64 just to hand it back as bytes.
+ * (`HTMLCanvasElement`, the other input here, *is* in `ImageLike` — only the
+ * `File` fallback needs the cast.)
  */
-const asRecognizable = (file: File) => file as unknown as ImageLike;
+const asRecognizable = (source: File | HTMLCanvasElement) =>
+  source as unknown as ImageLike;
 
 export default function OcrTool() {
   const [file, setFile] = useState<File | null>(null);
@@ -170,7 +174,19 @@ export default function OcrTool() {
       // and mixed images — there is deliberately no second run that could
       // mangle the other language's diacritics.
       const worker = await getWorker(baseLang);
-      const result = await worker.recognize(asRecognizable(file));
+
+      // Binarize first: it stops Tesseract reading photos and UI chrome in the
+      // frame as characters. Measured strictly non-worse on 7 images (see
+      // binarize.ts), so it runs for every mode — with a safe fallback to the
+      // untouched file if the browser can't give us a canvas.
+      let source: File | HTMLCanvasElement = file;
+      try {
+        source = await binarizeForOcr(file);
+      } catch (preprocessError) {
+        console.warn("OCR preprocessing skipped:", preprocessError);
+      }
+
+      const result = await worker.recognize(asRecognizable(source));
       const output = result.data.text ?? "";
 
       if (isAuto) {
